@@ -1,4 +1,5 @@
-// My first c extension for py
+// cpython extension to realize pagerank
+
 
 #define PY_SSIZE_T_CLEAN
 #include "Python.h"
@@ -8,6 +9,10 @@
 // This is a C-extension for Python to calculate Pagerank
 // This is just a bold attempt, I can not make sure that there
 // is no memery leak. The C code will be revised.
+
+// Usage
+// Need to be built using distutils.core before import.
+// Take an python list as input and return a list of pagerank.
 
 // Example
 // >>> import ssoPr
@@ -19,58 +24,9 @@
 // >>> ssoPr.pr(mat)
 // [0.17778392136096954, 0.31945979595184326, 0.22519296407699585, 0.2775634229183197]
 
-
-
 #define MAT_LEGAL_CHECKING
 
-#define min(a, b) ((a) > (b) ? (b) : (a))
-#define equal(a, b)	((a-b)<1e-7 && (a-b)>-(1e-7))
-
-typedef struct  { int row, col; float **element; }Mat;
-
-void swap(int *a, int *b)
-{
-	int m;
-	m = *a;
-	*a = *b;
-	*b = m;
-}
- 
-void perm(int list[], int k, int m, int* p, Mat* mat, float* det) 
-{
-	int i;
-
-	if(k > m){
-		float res = mat->element[0][list[0]];
-
-		for(i = 1; i < mat->row ; i++){
-			res *= mat->element[i][list[i]];
-		}
-
-		if(*p%2){
-			//odd is negative
-			*det -= res;
-		}else{
-			//even is positive
-			*det += res;
-		}
-	}
-	else{
-		// if the element is 0, we don't need to calculate the value for this permutation
-		if(!equal(mat->element[k][list[k]], 0.0f))
-			perm(list, k + 1, m, p, mat, det);
-		for(i = k+1; i <= m; i++)
-		{
-			if(equal(mat->element[k][list[i]], 0.0f))
-				continue;
-			swap(&list[k], &list[i]);
-			*p += 1;
-			perm(list, k + 1, m, p, mat, det);
-			swap(&list[k], &list[i]);
-			*p -= 1; 
-		}
-	}
-}
+typedef struct  { int row, col; float **element; } Mat;
 
 Mat* MatCreate(Mat* mat, int row, int col)
 {
@@ -125,7 +81,6 @@ Mat* MatSetVal(Mat* mat, float* val)
 			mat->element[row][col] = val[col + row * mat->col];
 		}
 	}
-
 	return mat;
 }
 
@@ -185,30 +140,6 @@ Mat* MatAdd(Mat* src1, Mat* src2, Mat* dst)
 	return dst;
 }
 
-/* dst = src1 - src2 */
-Mat* MatSub(Mat* src1, Mat* src2, Mat* dst)
-{
-	int row, col;
-
-#ifdef MAT_LEGAL_CHECKING
-	if( !(src1->row == src2->row && src2->row == dst->row && src1->col == src2->col && src2->col == dst->col) ){
-		printf("err check, unmatch matrix for MatSub\n");
-		MatDump(src1);
-		MatDump(src2);
-		MatDump(dst);
-		return NULL;
-	}
-#endif
-
-	for(row = 0 ; row < src1->row ; row++){
-		for(col = 0 ; col < src1->col ; col++){
-			dst->element[row][col] = src1->element[row][col] - src2->element[row][col];
-		}
-	}
-
-	return dst;
-}
-
 /* dst = src1 * src2 */
 Mat* MatMul(Mat* src1, Mat* src2, Mat* dst)
 {
@@ -262,25 +193,6 @@ Mat* MatTrans(Mat* src, Mat* dst)
 	return dst;
 }
 
-void MatCopy(Mat* src, Mat* dst)
-{
-	int row, col;
-	
-#ifdef MAT_LEGAL_CHECKING
-	if( src->row != dst->row || src->col != dst->col){
-		printf("err check, unmathed matrix for MatCopy\n");
-		MatDump(src);
-		MatDump(dst);
-		return ;
-	}
-#endif
-	
-	for(row = 0 ; row < src->row ; row++){
-		for(col = 0 ; col < src->col ; col++)
-			dst->element[row][col] = src->element[row][col];
-	}
-}
-
 Mat* MatEnlarge(Mat* src, Mat* dst, float alpha){
 
 	for(int i=0;i<src->row;i++){
@@ -292,21 +204,23 @@ Mat* MatEnlarge(Mat* src, Mat* dst, float alpha){
 }
 
 
-
-Mat trans_t, temp, trans_ret, rank, inipr, inimat, t, x, y, pagerank, pre_matrix;
-
-
 Mat mat_tran(Mat *mat){
 
 	//init
 	int len=mat->col;
-	// Mat trans_t;
+	
+	Mat trans_t, temp, trans_ret;
+
 	MatCreate(&trans_t,len,len);
+	MatCreate(&temp,len,len);
+	MatCreate(&trans_ret,len,len);
+
+
 	MatTrans(mat,&trans_t);
 	float **adj_matrix=trans_t.element;
 	//MatDump(&t);
 
-    float trans_matrix[len][len];
+	float trans_matrix[len][len];
     int count[len];//count how many links from index i pointing to other pages.
     memset(trans_matrix,0,sizeof(trans_matrix));
     memset(count,0,sizeof(count));
@@ -337,10 +251,11 @@ Mat mat_tran(Mat *mat){
         }
     }
 
-	MatCreate(&temp,len,len);
-	MatCreate(&trans_ret,len,len);
 	MatSetVal(&temp,trans_matrix);
 	MatTrans(&temp,&trans_ret);
+
+	MatDelete(&trans_t);
+	MatDelete(&temp);
 
     return trans_ret;
 }
@@ -351,15 +266,20 @@ Mat pr(float **a,int len, float alpha, int max_iter){
 	// init
 	// float f_rank[len];
 	float f_inipr[len];
+	float avg_pr=1/(float)len;
 	for(int i=0;i<len;i++){
-		f_inipr[i]=1/(float)len;
+		f_inipr[i]=avg_pr;
 	}
+
+	Mat rank,inipr,inimat,t,x,y,pre_matrix;
+
 	MatCreate(&rank,len,1);
 	MatCreate(&inipr,len,1);
 	MatCreate(&inimat,len,len);
 	MatCreate(&t,len,1);
 	MatCreate(&x,len,1);
 	MatCreate(&y,len,1);
+
 	MatSetVal(&rank,f_inipr);
 	MatSetVal(&inipr,f_inipr);
 	MatSetVal(&inimat,a);
@@ -377,41 +297,28 @@ Mat pr(float **a,int len, float alpha, int max_iter){
 		MatAdd(&t,&x,&y);
 		rank=y;
 	}
-	// MatDump(&rank);
+	
+	// free memery space
+	MatDelete(&inimat);
+	MatDelete(&inipr);
+	MatDelete(&pre_matrix);
+	MatDelete(&t);
+	MatDelete(&x);
 
 	return rank;
 }
 
 
-PyListObject * get_pagerank(float ** arr, int len){
-	int max_iter = 100;
-    //int len = 4;
-	float alpha = 0.8;
-    // float arr[4][4]={ 
-	// {0.0f, 1.0f, 0.0f, 0.0f}, 
-	// {1.0f, 0.0f, 0.0f, 1.0f}, 
-	// {1.0f, 1.0f, 0.0f, 0.0f},
-	// {1.0f, 0.0f, 1.0f, 0.0f}};
-    pagerank = pr(arr,len,alpha,max_iter);
+PyListObject * get_pagerank(float ** arr, int len, float alpha, int max_iter){
+
+    Mat pagerank = pr(arr,len,alpha,max_iter);
 	// MatDump(&pagerank);
-
-
-	// free memery space
-	MatDelete(&trans_ret);
-	MatDelete(&trans_t);
-	MatDelete(&temp);
-	// MatDelete(&rank); // MatDelete(&y); MatDelete(&pagerank); same place
-	MatDelete(&inimat);
-	MatDelete(&inipr);
-	MatDelete(&t);
-	MatDelete(&x);
-	MatDelete(&pre_matrix);
 
     PyListObject *list;
     list = (PyListObject *) Py_BuildValue("[]");
     for(int i=0;i<pagerank.row;i++){
         PyObject* pyfloat = (PyObject *)Py_BuildValue("f",pagerank.element[i][0]);
-        PyList_Append(list,pyfloat);
+        PyList_Append((PyObject*)list,pyfloat);
     }
 
     MatDelete(&pagerank);
@@ -422,10 +329,21 @@ PyListObject * get_pagerank(float ** arr, int len){
 
 static PyObject* ssoPr_pr(PyObject* self, PyObject* args) 
 {
+	PyObject* arglist;
+	PyObject* arg1; // alpha
+	PyObject* arg2; // max_iter
     PyObject* adjMatrix; //get matrix in python list
    
-    if (! PyArg_ParseTuple( args, "O", &adjMatrix))
+    if (! PyArg_ParseTuple( args, "O", &arglist))
         return NULL;
+	
+	// get args
+	adjMatrix=PyList_GetItem(arglist,0);
+	arg1=PyList_GetItem(arglist,1);
+	arg2=PyList_GetItem(arglist,2);
+	float alpha = (float)PyFloat_AsDouble(arg1);
+	int max_iter = (int)PyInt_AsLong(arg2);
+
 
     long length = PyList_Size(adjMatrix); // matrix should be square
 
@@ -441,7 +359,7 @@ static PyObject* ssoPr_pr(PyObject* self, PyObject* args)
         }
     }
 
-    return get_pagerank(c_adjMatrix,length);
+    return get_pagerank(c_adjMatrix,length,alpha,max_iter);
 }
 
 
@@ -465,3 +383,74 @@ PyMODINIT_FUNC PyInit_ssoPr(void)
 {
     return PyModule_Create(&ssoPr_module);
 }
+
+
+
+// py part
+// import ssoPr
+
+// def Singleton(cls):
+// 	_instance={}
+// 	def _singleton(*args,**kwagrs):
+// 		if cls not in  _instance:
+// 			_instance[cls]=cls(*args,**kwagrs)
+// 		return _instance[cls]
+// 	return _singleton
+
+
+// @Singleton
+// class PR():
+//     '''
+//     It is a singleton class. You should always have only one instance of this class.
+//     Example:
+//     matrix=[[0,1,0,0],
+//             [1,0,0,1],
+//             [1,1,0,0],
+//             [1,0,1,0]]
+//     p=PR(matrix)
+//     print(p.get_page_rank())
+//     >>>[0.17778392136096954, 0.31945979595184326, 0.22519296407699585, 0.2775634229183197]
+//     '''
+        
+//     def __init__(self,mat:list,alpha=0.8,max_iter=100) -> None:
+//         if self._mat_checker(mat):
+//             self._mat=mat
+//         self.alpha=alpha
+//         self.max_iter=max_iter
+//         pass
+    
+//     @property
+//     def mat(self):
+//         return self._mat
+    
+//     @mat.setter
+//     def mat(self,value):
+//         if self._mat_checker(value):
+//             self._mat=value
+    
+//     def _mat_checker(self,mat):
+        
+//         # check instance
+//         if not isinstance(mat,list):
+//             raise ValueError('input should be pylist')
+//         else:
+//             for i in mat:
+//                 if not isinstance(i,list):
+//                     raise ValueError('Input should be matrix in pylist')
+        
+//         # check shape
+//         for i in mat:
+//             if len(mat)!=len(i):
+//                 raise ValueError('Input should be square matrix')
+                
+//         # check value  
+//         for i in mat:      
+//             for j in i:
+//                 if j!=0 and j!=1:
+//                     raise ValueError('Value in adjency matrix can only be 0 or 1')
+//         return True
+    
+
+//     def get_page_rank(self):
+//         pr_list=ssoPr.pr([self.mat,float(self.alpha),int(self.max_iter)])
+//         return pr_list
